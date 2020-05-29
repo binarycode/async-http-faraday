@@ -50,13 +50,16 @@ module Async
 				def initialize(*arguments, **options, &block)
 					super
 					
-					@internet = Async::HTTP::Internet.new
+					@clients = {}
 					@persistent = PERSISTENT && options.fetch(:persistent, true)
 					@timeout = options[:timeout]
 				end
 				
 				def close
-					@internet.close
+					clients = @clients.values
+					@clients.clear
+				
+					clients.each(&:close)
 				end
 				
 				def call(env)
@@ -66,14 +69,26 @@ module Async
 					
 					Sync do
 						with_timeout do
-							response = @internet.call(env[:method].to_s.upcase, env[:url].to_s, env[:request_headers], env[:body] || [])
+							endpoint = Endpoint.parse(env[:url].to_s, ssl_context: ssl_context)
+							key = host_key(endpoint)
+				
+							client = @clients.fetch(key) do
+								@clients[key] = Client.new(endpoint)
+							end
+				
+							body = Body::Buffered.wrap(env[:body] || [])
+							headers = ::Protocol::HTTP::Headers[env[:request_headers]]
+				
+							request = ::Protocol::HTTP::Request.new(client.scheme, endpoint.authority, env[:method].to_s.upcase, endpoint.path, nil, headers, body)
+				
+							response = client.call(request)
 							
 							save_response(env, response.status, response.read, response.headers)
 						end
 					ensure
 						# If we are the top level task, even if we are persistent, we must close the connection:
 						if parent.nil? || !@persistent
-							@internet.close
+							close
 						end
 					end
 					
@@ -95,6 +110,22 @@ module Async
 						end
 					else
 						yield
+					end
+				end
+
+				def host_key(endpoint)
+					url = endpoint.url.dup
+					
+					url.path = ""
+					url.fragment = nil
+					url.query = nil
+					
+					return url
+				end
+
+				def ssl_context
+					@ssl_context ||= OpenSSL::SSL::SSLContext.new.tap do |c|
+						c.set_params(verify_mode: OpenSSL::SSL::VERIFY_NONE)
 					end
 				end
 			end

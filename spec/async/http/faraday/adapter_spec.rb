@@ -126,4 +126,8 @@ RSpec.describe Async::HTTP::Faraday::Adapter do
 	it 'wraps underlying exceptions into Faraday analogs' do
 		expect { get_response(endpoint.url, '/index') }.to raise_error(Faraday::ConnectionFailed)
 	end
+
+	it 'does not check certificate validity' do
+		expect { get_response('https://self-signed.badssl.com', '/') }.not_to raise_error
+	end
 end
